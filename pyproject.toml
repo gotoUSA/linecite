@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "coderef"
+version = "0.1.0.dev0"
+description = "Code citations in docs that re-derive their line numbers from the source."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+coderef = "coderef.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coderef"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
