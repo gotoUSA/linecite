@@ -124,7 +124,7 @@ ignore_patterns = []            # regexes of regions to skip (the legacy scan al
 ```yaml
 repos:
   - repo: https://github.com/gotoUSA/linecite
-    rev: v0.1.0
+    rev: v0.1.1
     hooks:
       - id: linecite-sync     # or linecite-check, to report without rewriting
 ```
@@ -145,7 +145,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: gotoUSA/linecite@v0.1.0
+      - uses: gotoUSA/linecite@v0.1.1
 ```
 
 The job fails when `linecite check` does. On a pull request, the action also comments with the doc lines

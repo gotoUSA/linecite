@@ -4,13 +4,32 @@ build-backend = "hatchling.build"
 
 [project]
 name = "linecite"
-version = "0.1.0"
+version = "0.1.1"
 description = "Code citations in docs that re-derive their line numbers from the source."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
+authors = [{ name = "gotoUSA" }]
+keywords = ["documentation", "docs", "code citations", "line numbers", "stale docs", "pre-commit", "ci"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Documentation",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Software Development :: Quality Assurance",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/gotoUSA/linecite"
+Source = "https://github.com/gotoUSA/linecite"
+Issues = "https://github.com/gotoUSA/linecite/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pre-commit>=3"]
