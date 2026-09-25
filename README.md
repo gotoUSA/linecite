@@ -19,6 +19,34 @@ title says what the line is. When code above it moves, `coderef sync` rewrites b
 | `coderef affected <rev>` | lists doc lines whose citations point into code changed since `<rev>` — the prose to re-read |
 | `coderef locate <path> <line>` | proposes a citation for an existing `path:line` |
 | `coderef list` / `where <spec>` | inspect what citations resolve to |
+| `coderef audit` | traces existing number-only citations through git history: which ones already point at the wrong line |
+| `coderef adopt [--write]` | converts number-only citations into links (markdown) or anchors (other files) |
+
+## Existing docs: audit, then adopt
+
+Docs you already have cite code as `orders.py:310` or `[orders.py:310](app/orders.py#L310)`. `coderef audit`
+judges them without changing anything. For each citation it asks git when the doc line was written, reads line
+310 of the code *as it was then*, and follows that line to today's code:
+
+```
+docs/design.md:14  ok       orders.py:310                  written against 9b2f41d0c3
+docs/design.md:31  stale    orders.py:118 -> orders.py:131  written against 4e1a9c2b07
+docs/design.md:40  gone     orders.py:77                   `row.lock()` is gone; written against 4e1a9c2b07
+docs/design.md:52  unknown  orders.py:12                   line 12 was blank: too little to identify; written against 4e1a9c2b07
+
+number-only citations 4 · ok 1 · stale 1 · gone 1 · unknown 1 · unverifiable 0
+```
+
+Today's line 310 is never the reference — it holds *some* code, so judging by it would pass numbers that are
+already wrong. Where docs and code live in separate repositories, the code is read as of the doc line's
+date (following the first-parent line of `HEAD`); lines not committed yet are read against the working tree.
+The results are estimates: a doc line edited later (a typo fix) is dated by that edit. In a shallow clone (CI
+checkouts often fetch one commit) lines older than the clone are reported `unverifiable` — fetch full history.
+
+`coderef adopt` uses the same trace to propose conversions — a titled link in markdown, an anchor elsewhere —
+with the number set to where the cited line is now. It writes nothing until `--write`; every proposal is
+resolved before it is shown, so converted citations pass `check`. Citations that are gone, ambiguous or
+undatable are listed and left alone.
 
 ## Citation forms
 

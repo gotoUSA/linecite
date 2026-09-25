@@ -23,7 +23,7 @@ def changed_lines(repo: Repo, rev: str) -> dict[str, set[int]]:
     """Working-tree line numbers changed since REV, per file (committed, staged and unstaged edits)."""
     out: dict[str, set[int]] = {}
     current = None
-    for line in repo.git("diff", "-U0", "--no-color", rev, "--").splitlines():
+    for line in repo.git("diff", "-U0", "--no-color", "--relative", rev, "--").splitlines():
         if line.startswith("+++ "):
             current = line[6:] if line.startswith("+++ b/") else None
         elif line.startswith("@@") and current:

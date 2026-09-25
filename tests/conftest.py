@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import textwrap
 from pathlib import Path
@@ -15,7 +16,7 @@ class Sandbox:
         self.root = root
         self.git("init", "-q")
 
-    def git(self, *args: str) -> str:
+    def git(self, *args: str, env: dict | None = None) -> str:
         out = subprocess.run(
             [
                 "git",
@@ -25,6 +26,8 @@ class Sandbox:
                 "user.email=t@t",
                 "-c",
                 "commit.gpgsign=false",
+                "-c",
+                "core.autocrlf=false",
                 *args,
             ],
             cwd=self.root,
@@ -32,6 +35,7 @@ class Sandbox:
             text=True,
             encoding="utf-8",
             check=True,
+            env={**os.environ, **(env or {})},
         )
         return out.stdout
 
@@ -44,9 +48,11 @@ class Sandbox:
     def read(self, rel: str) -> str:
         return (self.root / rel).read_bytes().decode("utf-8")
 
-    def commit(self, msg: str = "c") -> str:
+    def commit(self, msg: str = "c", date: str | None = None) -> str:
+        """Commit everything; DATE (e.g. "2026-01-02T00:00:00+0000") sets author and committer time."""
         self.git("add", "-A")
-        self.git("commit", "-q", "-m", msg)
+        env = {"GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date} if date else None
+        self.git("commit", "-q", "-m", msg, env=env)
         return self.git("rev-parse", "HEAD").strip()
 
     def run(self, *argv: str, capsys) -> tuple[int, str]:

@@ -6,6 +6,8 @@
     list  [FILES]          every citation and the line it resolves to
     where SPEC             what a spec resolves to
     locate PATH LINE       enclosing symbol and a proposed spec for a path:line citation (--at SHA for history)
+    audit [FILES]          number-only citations traced through git history: ok, stale, gone, unknown
+    adopt [FILES] [--write]  convert number-only citations into links (markdown) or anchors (other)
 
 Documents default to `docs` in the config; the cited code is `code_root` (or --root).
 """
@@ -17,12 +19,14 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .adopt import Proposal, plan, title_attr, write
 from .affected import affected
+from .audit import GONE, STALE, STATUSES, UNVERIFIABLE, Traced, audit
 from .config import Config, load
 from .errors import ConfigError, RefError
 from .repo import Repo
 from .scan import Syntax, display, extract, line_of, scan_files
-from .spec import format_quote, render, resolve
+from .spec import Naming, describe, render, resolve
 
 
 def _files(args, cfg: Config) -> list[Path]:
@@ -65,7 +69,7 @@ def cmd_list(args, cfg: Config, repo: Repo) -> int:
             if c.kind == "marker":
                 print(f"{where}\t(not code)")
                 continue
-            if c.kind == "bare-link":
+            if c.kind in ("bare-link", "legacy"):
                 print(f"{where}\tLEGACY\t{text[c.start : c.end]}")
                 continue
             if c.error:
@@ -96,27 +100,14 @@ def cmd_locate(args, repo: Repo) -> int:
     lines = repo.source_lines(path, sha)
     if not 1 <= args.line <= len(lines):
         raise RefError(f"{path} has {len(lines)} lines")
-    text = lines[args.line - 1]
-    enclosing = None
-    if path.endswith((".py", ".pyi")):
-        best = None
-        for name, (a, b) in repo.python_symbols(path, sha).items():
-            if a <= args.line <= b and (best is None or b - a < best[1] - best[0]):
-                best, enclosing = (a, b), name
-    spec = (
-        args.path
-        + (f"::{enclosing}" if enclosing else "")
-        + " "
-        + format_quote(text.strip())
-    )
-    print(f"{path}:{args.line}{' @' + sha if sha else ''}  in {enclosing}")
-    print(f"    {text}")
+    named = describe(repo, path, args.line, args.line, sha)
+    spec = Naming(args.path, named.symbol, named.quotes).spec()  # the path as typed
+    print(f"{path}:{args.line}{' @' + sha if sha else ''}  in {named.symbol}")
+    print(f"    {lines[args.line - 1]}")
     print(f"spec  {spec}")
-    title = f"{enclosing or ''}: {text.strip()}".replace("\\", "\\\\").replace(
-        '"', '\\"'
-    )
     print(
-        f'link  [{path.rsplit("/", 1)[-1]}:{args.line}]({path}#L{args.line} "{title}")'
+        f"link  [{path.rsplit('/', 1)[-1]}:{args.line}]({path}#L{args.line} "
+        f"{title_attr(named.title())})"
     )
     try:
         _, a, b = resolve(repo, spec)
@@ -143,8 +134,73 @@ def cmd_affected(args, cfg: Config, repo: Repo) -> int:
     return 0
 
 
+def _traced_row(t: Traced) -> str:
+    note = [t.note] if t.note else []
+    if t.status != UNVERIFIABLE:
+        note.append(
+            f"written against {t.origin[:10]}"
+            if t.origin
+            else "not committed: read against the working tree"
+        )
+    now = f" -> {t.now}" if t.status == STALE else ""
+    return f"{display(t.doc)}:{t.line}\t{t.status}\t{t.written}{now}\t{'; '.join(note)}"
+
+
+def _tally(traced: list[Traced]) -> str:
+    counts = " · ".join(f"{s} {sum(t.status == s for t in traced)}" for s in STATUSES)
+    return f"number-only citations {len(traced)} · {counts}"
+
+
+def cmd_audit(args, cfg: Config, repo: Repo) -> int:
+    traced = audit(_files(args, cfg), repo, cfg)
+    for t in traced:
+        print(_traced_row(t))
+    print(f"\n{_tally(traced)}")
+    print(
+        "estimates: each doc line is dated by git blame; a later edit to the line moves its date"
+    )
+    return 1 if any(t.status in (STALE, GONE) for t in traced) else 0
+
+
+def cmd_adopt(args, cfg: Config, repo: Repo) -> int:
+    plans = plan(_files(args, cfg), repo, cfg)
+    converted: list[Traced] = []
+    left = 0
+    for p in plans:
+        rows = [(x.traced.line, x) for x in p.proposals] + [
+            (t.line, (t, why)) for t, why in p.left
+        ]
+        for _, row in sorted(rows, key=lambda r: r[0]):
+            if isinstance(row, Proposal):
+                t = row.traced
+                converted.append(t)
+                print(f"{display(p.path)}:{t.line}\t{t.status}\t{t.written}")
+                print(f"\t=> {row.new}")
+            else:
+                t, why = row
+                left += 1
+                print(
+                    f"{display(p.path)}:{t.line}\t{t.status}\t{t.written}\tleft as is: {why}"
+                )
+        if args.write and p.proposals:
+            write(p)
+    stale = sum(t.status == STALE for t in converted)
+    print(
+        f"\nadopt: {len(converted)} to convert (ok {len(converted) - stale} · stale {stale})"
+        f" · {left} left for a human"
+    )
+    if args.write:
+        print(f"written: {sum(bool(p.proposals) for p in plans)} file(s)")
+    elif converted:
+        print(
+            "nothing written. Stale numbers are estimates from git blame: review them, then --write"
+        )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
-    common = argparse.ArgumentParser(add_help=False)
+    # SUPPRESS: a subparser default would otherwise overwrite an option given before the subcommand
+    common = argparse.ArgumentParser(add_help=False, argument_default=argparse.SUPPRESS)
     common.add_argument(
         "--config",
         type=Path,
@@ -165,9 +221,17 @@ def build_parser() -> argparse.ArgumentParser:
         ("check", "report drift, broken anchors and un-anchored citations"),
         ("sync", "rewrite drifted numbers, then report what still fails"),
         ("list", "every citation and what it resolves to"),
+        ("audit", "trace number-only citations through git history"),
     ):
         p = sub.add_parser(name, parents=[common], help=text)
         p.add_argument("files", nargs="*", type=Path)
+    p = sub.add_parser(
+        "adopt",
+        parents=[common],
+        help="convert number-only citations into links or anchors (dry run without --write)",
+    )
+    p.add_argument("files", nargs="*", type=Path)
+    p.add_argument("--write", action="store_true", help="apply the proposals")
     p = sub.add_parser(
         "affected", parents=[common], help="doc lines citing code changed since REV"
     )
@@ -184,6 +248,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def run(args, cfg: Config, repo: Repo) -> int:
+    if args.cmd in ("check", "sync"):
+        return cmd_check(args, cfg, repo, write=args.cmd == "sync")
+    commands = {
+        "list": lambda: cmd_list(args, cfg, repo),
+        "audit": lambda: cmd_audit(args, cfg, repo),
+        "adopt": lambda: cmd_adopt(args, cfg, repo),
+        "affected": lambda: cmd_affected(args, cfg, repo),
+        "where": lambda: cmd_where(args, repo),
+        "locate": lambda: cmd_locate(args, repo),
+    }
+    return commands[args.cmd]()
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -191,22 +269,17 @@ def main(argv: list[str] | None = None) -> int:
         pass
     args = build_parser().parse_args(argv)
     try:
-        cfg = load(args.config, args.root, Path.cwd())
+        cfg = load(
+            getattr(args, "config", None), getattr(args, "root", None), Path.cwd()
+        )
         repo = Repo(cfg.code_root)
-        if args.cmd in ("check", "sync"):
-            return cmd_check(args, cfg, repo, write=args.cmd == "sync")
-        if args.cmd == "list":
-            return cmd_list(args, cfg, repo)
-        if args.cmd == "affected":
-            return cmd_affected(args, cfg, repo)
-        if args.cmd == "where":
-            return cmd_where(args, repo)
-        if args.cmd == "locate":
-            return cmd_locate(args, repo)
+        try:
+            return run(args, cfg, repo)
+        finally:
+            repo.close()
     except (RefError, ConfigError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    return 2
 
 
 if __name__ == "__main__":

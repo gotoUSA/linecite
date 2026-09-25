@@ -189,3 +189,60 @@ def format_quote(text: str) -> str:
         return f"`{text}`"
     fence = "`" * (longest + 1)
     return f"{fence} {text} {fence}"
+
+
+MIN_WORD_CHARS = (
+    3  # fewer identifier characters (`)`, `}`, `"""`) cannot tell one line from another
+)
+
+
+def too_short(line: str) -> bool:
+    return len(re.findall(r"\w", line)) < MIN_WORD_CHARS
+
+
+@dataclass(frozen=True)
+class Naming:
+    """How a citation names lines: a symbol and quotes (text, n-th hit); no quotes = the whole symbol."""
+
+    path: str
+    symbol: str | None
+    quotes: tuple[tuple[str, int | None], ...]
+
+    def refs(self) -> str:
+        return " .. ".join(
+            format_quote(text) + (f"#{nth}" if nth else "") for text, nth in self.quotes
+        )
+
+    def spec(self) -> str:
+        sym = f"::{self.symbol}" if self.symbol else ""
+        refs = self.refs()
+        return self.path + sym + (f" {refs}" if refs else "")
+
+    def title(self) -> str:
+        """The link-title form: `symbol: fragment` when that is enough, else the backtick grammar."""
+        sym = self.symbol or ""
+        if len(self.quotes) == 1 and self.quotes[0][1] is None:
+            return f"{sym}: {self.quotes[0][0]}"
+        return f"{sym} {self.refs()}".strip()
+
+
+def describe(repo: Repo, path: str, a: int, b: int, sha: str | None = None) -> Naming:
+    """Name lines A..B of PATH by their innermost symbol and quoted text — the inverse of `resolve`."""
+    sym = repo.enclosing_symbol(path, sha, a, b)
+    span = repo.symbol_span(path, sha, sym)
+    if sym and a < b and span == (a, b):
+        return Naming(path, sym, ())
+    lines = repo.source_lines(path, sha)
+    quotes = []
+    for n in dict.fromkeys((a, b)):
+        text = lines[n - 1].strip()
+        if too_short(text):
+            raise RefError(
+                f"line {n} ({text!r}) has too little text to quote"
+                if text
+                else f"line {n} is blank"
+            )
+        want = _norm(text)
+        hits = [k for k in range(span[0], span[1] + 1) if want in _norm(lines[k - 1])]
+        quotes.append((text, None if len(hits) == 1 else hits.index(n) + 1))
+    return Naming(path, sym, tuple(quotes))

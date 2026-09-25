@@ -10,7 +10,8 @@ Two citation forms carry what they point at, so their numbers can be re-derived:
 
 Symbol references in prose (`orders.py::OrderService.cancel`) are checked for existence.
 Citations that carry only a number — `orders.py:10`, a #L link without a title — are reported as
-legacy: nothing records which code they meant, so they cannot be re-derived.
+legacy: nothing records which code they meant, so they cannot be re-derived from the source alone
+(`audit` estimates them from git history, `adopt` converts them).
 """
 
 from __future__ import annotations
@@ -28,6 +29,11 @@ FENCE_RE = re.compile(
     r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)", re.M | re.S
 )
 MARKDOWN_SUFFIXES = (".md", ".markdown", ".mdx")
+# markdown inline code: a run of N backticks (not backslash-escaped) up to the next run of exactly N;
+# it may wrap onto the next line but not across a blank line
+INLINE_CODE_RE = re.compile(
+    r"(?<![`\\])(`+)(?!`)(?:[^\n]|\n(?![ \t]*\n))*?(?<!`)\1(?!`)"
+)
 LINK_RE = re.compile(
     r"(?<!!)\[(?P<text>[^\]\n]*)\]\((?P<url>[^\s()]+)"
     r"(?:[ \t]+(?P<title>\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*'))?\)"
@@ -37,6 +43,8 @@ TEXT_PATH_NUM_RE = re.compile(r":(\d+(?:[-~]\d+)?)$")
 NUM_TOKEN_RE = re.compile(r"(?<![\d.])\d+(?:[-~]\d+)?(?![\d])")
 TITLE_SIMPLE_RE = re.compile(r"(?P<sym>[\w.]*)(?:\s*:\s+(?P<quote>.+))?", re.S)
 TITLE_QUOTED_RE = re.compile(r"(?P<sym>[\w.]*)\s*(?P<rest>[`「].*)", re.S)
+PART_RE = re.compile(r"(\d+)(?:[-~](\d+))?")
+PINNED_BEFORE_RE = re.compile(r"@[0-9a-f]{7,40}:$")
 
 
 class Syntax:
@@ -65,7 +73,7 @@ class Syntax:
                 r"|(?P<word>(?<![\d.])\d+(?:[-~·,]\d+)*(?:" + word_alts + r"))(?!<!--@)"
             )
         self.legacy = re.compile(legacy)
-        self.pinned_pathref = re.compile(r"@[0-9a-f]{7,40}:[\w./-]+:\d")
+        self.word_suffixes = tuple(sorted(words, key=len, reverse=True))
         self.ignore = [re.compile(p, re.S) for p in cfg.ignore_patterns]
 
 
@@ -84,14 +92,24 @@ class Slot:
         return render(a, b, "~" if "~" in self.old else "-")
 
 
+@dataclass(frozen=True)
+class Cited:
+    """What a number-only citation names: a file suffix (None when the prose names no file) and line ranges."""
+
+    path: str | None
+    ranges: tuple[tuple[int, int], ...]
+
+
 @dataclass
 class Citation:
-    kind: str  # "anchor" | "link" | "symref" | "marker" (a <!--@--> non-code number) | "bare-link" (no title)
+    kind: str  # "anchor" | "link" | "symref" | "marker" (a <!--@--> non-code number)
+    #            | "bare-link" (a #L link without a title) | "legacy" (path:N, or N<suffix>, in prose)
     start: int
     end: int
     spec: str = ""
     slots: list[Slot] = field(default_factory=list)
     error: str | None = None  # the citation itself is malformed
+    cited: Cited | None = None  # bare-link and legacy: what the number alone says
 
     @property
     def span(self) -> tuple[int, int]:
@@ -132,6 +150,11 @@ def visible(text: str, path: Path, syntax: Syntax, skip_fences: bool = False) ->
     for rx in syntax.ignore:
         spans += [m.span() for m in rx.finditer(text)]
     return blank(text, spans)
+
+
+def code_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of markdown inline code (`like this`), backticks included."""
+    return [m.span() for m in INLINE_CODE_RE.finditer(text)]
 
 
 def line_of(text: str, pos: int) -> int:
@@ -179,14 +202,17 @@ def _link(m: re.Match) -> Citation | None:
         return None
     c = Citation("link", m.start(), m.end())
     title = m.group("title")
-    if title is None:
+    if (
+        title is None
+    ):  # keeps its slots: adopt rewrites the numbers when it adds a title
         c.kind = "bare-link"
-        return c
-    try:
-        c.spec = title_spec(path, re.sub(r"\\(.)", r"\1", title[1:-1]))
-    except RefError as e:
-        c.error = str(e)
-        return c
+        c.cited = Cited(path, (_part(frag),))
+    else:
+        try:
+            c.spec = title_spec(path, re.sub(r"\\(.)", r"\1", title[1:-1]))
+        except RefError as e:
+            c.error = str(e)
+            return c
     old_frag = fragment
     frag_start = m.start("url") + len(target) + 1
     c.slots.append(Slot(frag_start, frag_start + len(old_frag), old_frag, "fragment"))
@@ -216,10 +242,36 @@ def _link(m: re.Match) -> Citation | None:
     return c
 
 
+def _part(m: re.Match) -> tuple[int, int]:
+    return int(m.group(1)), int(m.group(2) or m.group(1))
+
+
+def _legacy(m: re.Match, syntax: Syntax) -> Citation:
+    """A number-only citation: `path.ext:12`, `path.ext:7-11,20`, or `310L` for a word suffix."""
+    if m.group("pathref"):
+        path, _, nums = m.group("pathref").rpartition(":")
+        at = m.end() - len(nums)
+    else:
+        word = m.group("word")
+        suffix = next(s for s in syntax.word_suffixes if word.endswith(s))
+        path, nums, at = None, word[: -len(suffix)], m.start()
+    slots, ranges = [], []
+    for part in re.finditer(r"[^,·]+", nums):
+        ranges.append(_part(PART_RE.fullmatch(part.group(0))))
+        slots.append(Slot(at + part.start(), at + part.end(), part.group(0), "num"))
+    return Citation(
+        "legacy", m.start(), m.end(), slots=slots, cited=Cited(path, tuple(ranges))
+    )
+
+
 def extract(
     text: str, path: Path, syntax: Syntax
 ) -> tuple[list[Citation], list[tuple[int, int]]]:
-    """All citations in the document, in order, plus the spans of anchors with no number (orphans)."""
+    """All citations in the document, in order, plus the spans of anchors with no number (orphans).
+
+    The one place that decides what counts as a citation: check, sync, affected, list, audit and
+    adopt all read documents through it.
+    """
     view = visible(text, path, syntax)
     cites: list[Citation] = []
     for m in syntax.anchor.finditer(view):
@@ -241,15 +293,27 @@ def extract(
         if not any(a <= m.start() < b for a, b in owned)
     ]
 
-    # links are markup only outside code fences; there they are literal example text
+    # links are markup only outside code fences and inline code; there they are literal example text
     prose = visible(blank(text, owned + orphans), path, syntax, skip_fences=True)
+    code = code_spans(prose) if path.suffix.lower() in MARKDOWN_SUFFIXES else []
     for m in LINK_RE.finditer(prose):
-        c = _link(m)
+        c = None if any(a <= m.start() < b for a, b in code) else _link(m)
         if c is not None:
             cites.append(c)
     masked = blank(view, [c.span for c in cites] + orphans)
     for m in syntax.symref.finditer(masked):
         cites.append(Citation("symref", m.start(), m.end(), m.group("spec")))
+
+    # number-only citations; code fences hold tracebacks and examples, not citations
+    masked = visible(
+        blank(text, [c.span for c in cites] + orphans), path, syntax, skip_fences=True
+    )
+    for m in syntax.legacy.finditer(masked):
+        if m.group("pathref") and PINNED_BEFORE_RE.search(
+            masked[max(0, m.start() - 42) : m.start()]
+        ):
+            continue  # @sha:path:12 names history, it cannot drift
+        cites.append(_legacy(m, syntax))
     cites.sort(key=lambda c: c.start)
     return cites, orphans
 
@@ -273,6 +337,11 @@ def scan_file(
                     f"{name}:{ln}: {text[c.start : c.end]}   (link without a title naming the code)"
                 )
             continue
+        if c.kind == "legacy":
+            if cfg.legacy != "off":
+                ctx = " ".join(text[max(0, c.start - 60) : c.end + 20].split())
+                found.legacy.append(f"{name}:{ln}: {text[c.start : c.end]}   …{ctx}…")
+            continue
         found.anchors += 1
         if c.error:
             found.broken.append(f"{name}:{ln}: {c.error}")
@@ -295,20 +364,6 @@ def scan_file(
         if spec:
             found.broken.append(
                 f"{name}:{line_of(text, a)}: anchor has no number right before it  [{spec}]"
-            )
-
-    if cfg.legacy != "off":
-        masked = blank(text, [c.span for c in cites] + orphans)
-        prose = visible(masked, path, syntax, skip_fences=True)
-        for m in syntax.legacy.finditer(prose):
-            start = max(0, m.start() - 60)
-            if m.group("pathref") and syntax.pinned_pathref.search(
-                prose[start : m.end()]
-            ):
-                continue  # @sha:path:12 names history, it cannot drift
-            ctx = " ".join(prose[start : m.end() + 20].split())
-            found.legacy.append(
-                f"{name}:{line_of(text, m.start())}: {m.group(0)}   …{ctx}…"
             )
 
     if write and edits:

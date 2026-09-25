@@ -103,3 +103,18 @@ def test_locate_proposes_a_spec(sb, capsys):
     rc, out = sb.run("locate", "orders.py", "10", capsys=capsys)
     assert "spec  orders.py::OrderService.create_order `row.lock()`" in out
     assert "HEAD  10" in out
+
+
+def test_config_option_before_or_after_the_subcommand(sb, capsys, tmp_path_factory):
+    cfg_dir = tmp_path_factory.mktemp("cfg")
+    cfg = cfg_dir / "x.toml"
+    cfg.write_text('legacy = "off"\n', encoding="utf-8")
+    sb.write("app/orders.py", ORDERS)
+    sb.write("docs/a.md", "see orders.py:12\n")
+    sb.commit()
+    for argv in (
+        ("--config", str(cfg), "check", "docs/a.md"),
+        ("check", "--config", str(cfg), "docs/a.md"),
+    ):
+        rc, out = sb.run(*argv, capsys=capsys)
+        assert rc == 0 and "legacy 0" in out, (argv, out)
