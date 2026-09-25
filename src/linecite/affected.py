@@ -62,6 +62,7 @@ def changed_lines(repo: Repo, rev: str) -> dict[str, set[int]]:
     REV may be a range (A..B, A...B): then git compares commits, not the working tree.
     """
     require_commit(repo, rev)
+    # (test pull request: a line added inside changed_lines, docs not synced)
     out: dict[str, set[int]] = {}
     current = None
     for line in repo.git(
