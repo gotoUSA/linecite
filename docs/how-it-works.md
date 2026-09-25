@@ -21,7 +21,7 @@ rewrites the numbers, writing bytes so the file keeps its own line endings ([`sc
 ## What changed since a revision
 
 `affected` reads `git diff -U0` ([`affected.py:59`](../src/linecite/affected.py#L59 "changed_lines: def changed_lines(")) and flags a citation when a changed line falls
-anywhere inside the cited symbol, not just on the quoted line ([`affected.py:123`](../src/linecite/affected.py#L123 "affected: a, b = target.span")): a change next to a
+anywhere inside the cited symbol, not just on the quoted line ([`affected.py:124`](../src/linecite/affected.py#L124 "affected: a, b = target.span")): a change next to a
 line can change what the prose says about it.
 
 ## Auditing number-only citations
