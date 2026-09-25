@@ -1,8 +1,9 @@
-"""coderef command line.
+"""linecite command line.
 
     check [FILES]          drifted numbers, broken anchors, un-anchored citations; exit 1 if any
     sync  [FILES]          rewrite drifted numbers from the source, then report what still fails
     affected REV [FILES]   doc lines whose citations point into code changed since REV — re-read these
+                           (--format markdown [--link-base URL] for a pull request comment)
     list  [FILES]          every citation and the line it resolves to
     where SPEC             what a spec resolves to
     locate PATH LINE       enclosing symbol and a proposed spec for a path:line citation (--at SHA for history)
@@ -17,10 +18,11 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 from . import __version__
 from .adopt import Proposal, plan, title_attr, write
-from .affected import affected
+from .affected import Hit, affected, markdown
 from .audit import GONE, STALE, STATUSES, UNVERIFIABLE, Traced, audit
 from .config import Config, load
 from .errors import ConfigError, RefError
@@ -33,7 +35,7 @@ def _files(args, cfg: Config) -> list[Path]:
     files = list(args.files) if getattr(args, "files", None) else cfg.doc_files()
     if not files:
         raise ConfigError(
-            "no documents: pass FILES or set `docs` in .coderef.toml / [tool.coderef]"
+            "no documents: pass FILES or set `docs` in .linecite.toml / [tool.linecite]"
         )
     missing = [str(f) for f in files if not f.is_file()]
     if missing:
@@ -119,8 +121,31 @@ def cmd_locate(args, repo: Repo) -> int:
     return 0
 
 
+def doc_link(link_base: str | None):
+    """URL of a hit's doc line under LINK_BASE (a blob URL of the docs repository at the checked-out commit)."""
+    if not link_base:
+        return lambda h: None
+    try:
+        top = Repo(Path.cwd()).toplevel()
+    except RefError:
+        return lambda h: None
+
+    def link(h: Hit) -> str | None:
+        try:
+            rel = h.source.resolve().relative_to(top).as_posix()
+        except ValueError:
+            return None
+        # ?plain=1: rendered markdown has no line anchors; GitHub and GitLab show the source for it
+        return f"{link_base.rstrip('/')}/{quote(rel)}?plain=1#L{h.line}"
+
+    return link
+
+
 def cmd_affected(args, cfg: Config, repo: Repo) -> int:
     hits = affected(_files(args, cfg), repo, cfg, args.rev)
+    if args.format == "markdown":
+        print(markdown(hits, args.rev, doc_link(args.link_base)), end="")
+        return 0
     for h in hits:
         if h.error:
             print(f"{h.doc}:{h.line}\tBROKEN\t{h.error}")
@@ -159,6 +184,11 @@ def cmd_audit(args, cfg: Config, repo: Repo) -> int:
     print(
         "estimates: each doc line is dated by git blame; a later edit to the line moves its date"
     )
+    if any(t.status == UNVERIFIABLE and "shallow" in t.note for t in traced):
+        print(
+            "shallow clone: lines older than its history cannot be dated —"
+            " run `git fetch --unshallow` (actions/checkout: fetch-depth: 0)"
+        )
     return 1 if any(t.status in (STALE, GONE) for t in traced) else 0
 
 
@@ -204,7 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument(
         "--config",
         type=Path,
-        help="config file (default: ./.coderef.toml or ./pyproject.toml)",
+        help="config file (default: ./.linecite.toml or ./pyproject.toml)",
     )
     common.add_argument(
         "--root",
@@ -213,9 +243,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser = argparse.ArgumentParser(
-        prog="coderef", description=__doc__.split("\n\n")[0], parents=[common]
+        prog="linecite", description=__doc__.split("\n\n")[0], parents=[common]
     )
-    parser.add_argument("--version", action="version", version=f"coderef {__version__}")
+    parser.add_argument(
+        "--version", action="version", version=f"linecite {__version__}"
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name, text in (
         ("check", "report drift, broken anchors and un-anchored citations"),
@@ -237,6 +269,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("rev")
     p.add_argument("files", nargs="*", type=Path)
+    p.add_argument(
+        "--format",
+        choices=("text", "markdown"),
+        default="text",
+        help="markdown: a re-read list for a pull request comment",
+    )
+    p.add_argument(
+        "--link-base",
+        metavar="URL",
+        help="link doc lines under this blob URL, e.g. https://github.com/OWNER/REPO/blob/SHA",
+    )
     p = sub.add_parser("where", parents=[common], help="what a spec resolves to")
     p.add_argument("spec")
     p = sub.add_parser(
@@ -263,10 +306,14 @@ def run(args, cfg: Config, repo: Repo) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except (AttributeError, ValueError):
-        pass
+    for stream in (
+        sys.stdout,
+        sys.stderr,
+    ):  # paths and quoted code are rarely ASCII-only
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
     args = build_parser().parse_args(argv)
     try:
         cfg = load(

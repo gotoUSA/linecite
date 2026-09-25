@@ -1,32 +1,41 @@
-# coderef
+# linecite
 
-Docs that cite code by line number (`orders.py:310`) go stale on the next commit that touches the lines above.
-coderef lets a citation name the code it means — a **symbol and a quoted fragment** — derives the line number
+Docs that cite code by line number (`orders.py:310`<!--@-->) go stale on the next commit that touches the lines above.
+linecite lets a citation name the code it means — a **symbol and a quoted fragment** — derives the line number
 from the source, and tells you which paragraphs to re-read after the code changes.
 
 ```md
 Locks are taken in product order at [orders.py:310](app/orders.py#L310 "create_order: order_by(\"product_id\")").
 ```
 
-That is an ordinary markdown link: it renders as `orders.py:310`, clicks through to the line on GitHub, and its
-title says what the line is. When code above it moves, `coderef sync` rewrites both the `#L310` fragment and the
-`:310` in the link text; when the quoted code disappears, `coderef check` fails.
+That is an ordinary markdown link: it renders as `orders.py:310`<!--@-->, clicks through to the line on GitHub, and its
+title says what the line is. When code above it moves, `linecite sync` rewrites both the `#L310` fragment and the
+`:310` in the link text; when the quoted code disappears, `linecite check` fails.
 
 | command | what it does |
 |---|---|
-| `coderef check` | reports drifted numbers, citations that no longer resolve, and number-only citations; exit 1 if any (CI) |
-| `coderef sync` | rewrites drifted numbers in place (pre-commit), then reports what still needs a human |
-| `coderef affected <rev>` | lists doc lines whose citations point into code changed since `<rev>` — the prose to re-read |
-| `coderef locate <path> <line>` | proposes a citation for an existing `path:line` |
-| `coderef list` / `where <spec>` | inspect what citations resolve to |
-| `coderef audit` | traces existing number-only citations through git history: which ones already point at the wrong line |
-| `coderef adopt [--write]` | converts number-only citations into links (markdown) or anchors (other files) |
+| `linecite check` | reports drifted numbers, citations that no longer resolve, and number-only citations; exit 1 if any (CI) |
+| `linecite sync` | rewrites drifted numbers in place (pre-commit), then reports what still needs a human |
+| `linecite affected <rev>` | lists doc lines whose citations point into code changed since `<rev>` — the prose to re-read |
+| `linecite locate <path> <line>` | proposes a citation for an existing `path:line` |
+| `linecite list` / `where <spec>` | inspect what citations resolve to |
+| `linecite audit` | traces existing number-only citations through git history: which ones already point at the wrong line |
+| `linecite adopt [--write]` | converts number-only citations into links (markdown) or anchors (other files) |
+
+```sh
+pip install linecite      # Python 3.11+, git
+```
+
+Run it where your configuration is (see [Configuration](#configuration)), locally, as a
+[pre-commit hook](#pre-commit), or in [GitHub Actions](#github-action).
 
 ## Existing docs: audit, then adopt
 
-Docs you already have cite code as `orders.py:310` or `[orders.py:310](app/orders.py#L310)`. `coderef audit`
+<!-- linecite-ignore-start -->
+Docs you already have cite code as `orders.py:310` or `[orders.py:310](app/orders.py#L310)`. `linecite audit`
 judges them without changing anything. For each citation it asks git when the doc line was written, reads line
 310 of the code *as it was then*, and follows that line to today's code:
+<!-- linecite-ignore-end -->
 
 ```
 docs/design.md:14  ok       orders.py:310                  written against 9b2f41d0c3
@@ -43,7 +52,7 @@ date (following the first-parent line of `HEAD`); lines not committed yet are re
 The results are estimates: a doc line edited later (a typo fix) is dated by that edit. In a shallow clone (CI
 checkouts often fetch one commit) lines older than the clone are reported `unverifiable` — fetch full history.
 
-`coderef adopt` uses the same trace to propose conversions — a titled link in markdown, an anchor elsewhere —
+`linecite adopt` uses the same trace to propose conversions — a titled link in markdown, an anchor elsewhere —
 with the number set to where the cited line is now. It writes nothing until `--write`; every proposal is
 resolved before it is shown, so converted citations pass `check`. Citations that are gone, ambiguous or
 undatable are listed and left alone.
@@ -64,9 +73,11 @@ Links inside fenced code blocks are examples and are not checked.
 
 **Anchor** (hidden comment) — for HTML, for numbers in running prose, and for comments in code excerpts:
 
+<!-- linecite-ignore-start -->
 ```md
 the lock is taken at line 310<!--@ app/orders.py::create_order `order_by("product_id")` -->
 ```
+<!-- linecite-ignore-end -->
 
 The anchor sits right after the number it owns. Its spec grammar:
 
@@ -80,12 +91,25 @@ The anchor sits right after the number it owns. Its spec grammar:
 - **`@sha:`** — pin to a commit for code that no longer exists; pinned specs may use plain integers.
 - A bare `<!--@-->` marks a number that is not a code line.
 
+**Examples** — docs that teach the syntax (a contributing guide, this README) wrap their examples in
+ignore markers, each on a line of its own and outside code blocks (a marker shown in a code block is an
+example itself); a marker that pairs with nothing fails `check`:
+
+```md
+<!-- linecite-ignore-start -->
+Cite code as [orders.py:310](app/orders.py#L310 "create_order: row.lock()").
+<!-- linecite-ignore-end -->
+```
+
+<!-- linecite-ignore-start -->
 **Symbol reference** — `` `orders.py::OrderService.cancel` `` in prose fails `check` once the method is gone.
+<!-- linecite-ignore-end -->
 
 ## Configuration
 
-`.coderef.toml` (top-level keys) or `[tool.coderef]` in `pyproject.toml`:
+`.linecite.toml` (top-level keys) or `[tool.linecite]` in `pyproject.toml`:
 
+<!-- linecite-ignore-start -->
 ```toml
 code_root = "."                 # git repo of the cited code, relative to this file
 docs = ["docs/**/*.md", "README.md"]
@@ -93,5 +117,62 @@ number_suffixes = ["`"]         # text allowed between a number and its anchor: 
 legacy = "error"                # number-only citations: "error" | "warn" | "off"
 ignore_patterns = []            # regexes of regions to skip (the legacy scan also skips fenced code)
 ```
+<!-- linecite-ignore-end -->
 
-Status: early development.
+## pre-commit
+
+```yaml
+repos:
+  - repo: https://github.com/gotoUSA/linecite
+    rev: v0.1.0
+    hooks:
+      - id: linecite-sync     # or linecite-check, to report without rewriting
+```
+
+Both hooks read every configured document on every commit, whatever is staged: a commit that touches only
+code can move the lines a doc cites. `linecite-sync` rewrites drifted numbers and pre-commit stops the
+commit so you can stage the rewrite; citations whose code is gone still fail it.
+
+## GitHub Action
+
+```yaml
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write          # for the comment
+jobs:
+  linecite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: gotoUSA/linecite@v0.1.0
+```
+
+The job fails when `linecite check` does. On a pull request, the action also comments with the doc lines
+whose cited code the pull request changed — one comment per use of the action, rewritten on every push,
+so a paragraph a later push made irrelevant drops off the list. The job summary always carries the full
+report; a failure to comment (pull requests from forks get a read-only token) is a warning, not a failed
+job.
+
+| input | default | |
+|---|---|---|
+| `check` | `true` | run `linecite check` and fail on its findings |
+| `comment` | `true` | comment on pull requests |
+| `base` | the pull request's base commit | revision the changes are measured from |
+| `working-directory` | `.` | where the configuration is |
+| `config` | | configuration file, if not the default |
+| `github-token` | `github.token` | needs `pull-requests: write` |
+
+The output `affected` is the number of doc citations pointing into changed code.
+
+**Shallow checkouts.** `actions/checkout` fetches a single commit by default. `affected` needs only the
+base commit's files, which the action fetches itself; `audit` needs the history that dated every doc line,
+so run it after `actions/checkout` with `fetch-depth: 0` — in a shallow clone it reports old lines as
+`unverifiable` instead of guessing.
+
+Other CI systems can post the same report: `linecite affected origin/main --format markdown --link-base
+https://example.com/owner/repo/blob/<sha>` prints it as markdown with links to the doc lines.
+
+## License
+
+MIT

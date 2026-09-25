@@ -1,0 +1,129 @@
+name: linecite
+description: Fail on doc citations of code that drifted or broke, and list the paragraphs a pull request's code changes affect.
+author: gotoUSA
+branding:
+  icon: link
+  color: blue
+
+inputs:
+  check:
+    description: Run `linecite check`; the job fails on drifted, broken or number-only citations.
+    default: "true"
+  comment:
+    description: On pull requests, post the paragraphs to re-read as one comment that later pushes update.
+    default: "true"
+  base:
+    description: Revision the changes are measured from (pull requests default to their base commit).
+    default: ${{ github.event.pull_request.base.sha }}
+  working-directory:
+    description: Directory holding the linecite configuration.
+    default: "."
+  config:
+    description: Configuration file, if not .linecite.toml or pyproject.toml in working-directory.
+    default: ""
+  github-token:
+    description: "Token for the comment; needs `pull-requests: write`."
+    default: ${{ github.token }}
+
+outputs:
+  affected:
+    description: Number of doc citations that point into code changed since the base.
+    value: ${{ steps.report.outputs.affected }}
+
+runs:
+  using: composite
+  steps:
+    - name: Reset report files
+      shell: bash
+      # a second use of the action in the job must not report what the first one left behind
+      run: rm -f "$RUNNER_TEMP/linecite-check.txt" "$RUNNER_TEMP/linecite-affected.md" "$RUNNER_TEMP/linecite-affected.err"
+
+    - name: Install linecite
+      id: install
+      shell: bash
+      run: |
+        set -euo pipefail
+        py=$(command -v python3 || command -v python)
+        "$py" -c 'import sys; sys.exit(sys.version_info < (3, 11))' || {
+          echo "::error::linecite needs Python 3.11 or newer on the runner; add actions/setup-python before it"
+          exit 1
+        }
+        venv="$RUNNER_TEMP/linecite-venv"
+        "$py" -m venv "$venv"
+        bin="$venv/bin"; [ -d "$venv/Scripts" ] && bin="$venv/Scripts"
+        "$bin/python" -m pip install --quiet --disable-pip-version-check "$GITHUB_ACTION_PATH"
+        echo "python=$bin/python" >> "$GITHUB_OUTPUT"
+        echo "linecite=$bin/linecite" >> "$GITHUB_OUTPUT"
+
+    - name: linecite check
+      id: check
+      if: inputs.check == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        LINECITE: ${{ steps.install.outputs.linecite }}
+        CONFIG: ${{ inputs.config }}
+      run: |
+        # the runner's bash has -e: a failing check must not end the script before its code is kept
+        set -uo pipefail
+        args=()
+        if [ -n "$CONFIG" ]; then args=(--config "$CONFIG"); fi
+        code=0
+        "$LINECITE" ${args[@]+"${args[@]}"} check > "$RUNNER_TEMP/linecite-check.txt" 2>&1 || code=$?
+        cat "$RUNNER_TEMP/linecite-check.txt"
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+
+    - name: linecite affected
+      id: affected
+      if: inputs.base != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        LINECITE: ${{ steps.install.outputs.linecite }}
+        CONFIG: ${{ inputs.config }}
+        BASE: ${{ inputs.base }}
+      run: |
+        set -uo pipefail
+        # a default checkout holds one commit; affected needs the base commit's files, not its history
+        if ! git cat-file -e "$BASE^{commit}" 2>/dev/null && [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+          echo "::notice::shallow checkout: fetching base $BASE for linecite affected (linecite audit needs actions/checkout with fetch-depth: 0)"
+          git fetch --no-tags --quiet --depth=1 origin "$BASE" || true
+        fi
+        args=()
+        if [ -n "$CONFIG" ]; then args=(--config "$CONFIG"); fi
+        # an error goes into the report, not the job's result: check is the gate. The exit code, not
+        # stderr, says whether it failed (stderr can hold warnings next to a good list)
+        code=0
+        "$LINECITE" ${args[@]+"${args[@]}"} affected "$BASE" --format markdown \
+          --link-base "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$(git rev-parse HEAD)" \
+          > "$RUNNER_TEMP/linecite-affected.md" 2> "$RUNNER_TEMP/linecite-affected.err" || code=$?
+        cat "$RUNNER_TEMP/linecite-affected.md"
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+        if [ "$code" != 0 ]; then
+          echo "::warning::linecite affected: $(head -n 1 "$RUNNER_TEMP/linecite-affected.err")"
+        fi
+
+    - name: Report
+      id: report
+      if: always() && steps.install.outcome == 'success'
+      shell: bash
+      env:
+        PYTHON: ${{ steps.install.outputs.python }}
+        LINECITE_CHECK_CODE: ${{ steps.check.outputs.code }}
+        LINECITE_CHECK_OUT: ${{ runner.temp }}/linecite-check.txt
+        LINECITE_AFFECTED_CODE: ${{ steps.affected.outputs.code }}
+        LINECITE_AFFECTED_MD: ${{ runner.temp }}/linecite-affected.md
+        LINECITE_AFFECTED_ERR: ${{ runner.temp }}/linecite-affected.err
+        LINECITE_KEY: ${{ inputs.working-directory }} ${{ inputs.config }}
+        LINECITE_COMMENT: ${{ inputs.comment }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: '"$PYTHON" "$GITHUB_ACTION_PATH/action/comment.py"'
+
+    - name: Fail on check findings
+      if: steps.check.outputs.code != '' && steps.check.outputs.code != '0'
+      shell: bash
+      env:
+        CODE: ${{ steps.check.outputs.code }}
+      run: |
+        echo "::error::linecite check found citations to fix (see the step above; drifted numbers are fixed by linecite sync)"
+        exit "$CODE"

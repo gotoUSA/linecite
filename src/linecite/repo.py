@@ -7,12 +7,13 @@ import os
 import re
 import subprocess
 import threading
+import warnings
 from pathlib import Path
 
 from .errors import RefError
 
 Span = tuple[int, int]
-# coderef only reads: no opportunistic index refresh (git diff would otherwise rewrite .git/index),
+# linecite only reads: no opportunistic index refresh (git diff would otherwise rewrite .git/index),
 # and no fetching of missing blobs in a partial clone (which would write packs and go to the network)
 GIT_ENV = {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1"}
 
@@ -234,14 +235,17 @@ class Repo:
         key = (path, sha)
         if key not in self._symbols:
             try:
-                tree = ast.parse("\n".join(self.source_lines(path, sha)))
+                # the cited code's own warnings (e.g. an invalid escape) are not linecite's to report
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    tree = ast.parse("\n".join(self.source_lines(path, sha)))
             except SyntaxError as e:
                 raise RefError(
                     f"{path}: cannot parse ({e.msg}, line {e.lineno})"
                 ) from e
             out: dict[str, Span] = {}
 
-            def visit(body, prefix):
+            def visit(body, prefix, in_function=False):
                 for node in body:
                     if isinstance(
                         node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -251,8 +255,15 @@ class Repo:
                         )
                         name = prefix + node.name
                         out[name] = (start, node.end_lineno)
-                        visit(node.body, name + ".")
-                    elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                        visit(
+                            node.body,
+                            name + ".",
+                            not isinstance(node, ast.ClassDef),
+                        )
+                    # module and class attributes; a function's locals are not what docs name
+                    elif not in_function and isinstance(
+                        node, (ast.Assign, ast.AnnAssign)
+                    ):
                         targets = (
                             node.targets
                             if isinstance(node, ast.Assign)

@@ -1,23 +1,29 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "coderef"
+name = "linecite"
 version = "0.1.0.dev0"
 description = "Code citations in docs that re-derive their line numbers from the source."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pre-commit>=3"]
 
 [project.scripts]
-coderef = "coderef.cli:main"
+linecite = "linecite.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/coderef"]
+packages = ["src/linecite"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# linecite checks its own docs
+[tool.linecite]
+docs = ["README.md", "docs/**/*.md"]

@@ -6,7 +6,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from coderef.cli import main
+from linecite.cli import main
 
 
 class Sandbox:

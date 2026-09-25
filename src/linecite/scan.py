@@ -25,14 +25,15 @@ from .errors import RefError
 from .repo import Repo
 from .spec import format_quote, render, resolve
 
+# line ends: in a CRLF document `$` comes after the \r, so end-of-line patterns allow one (\r?$)
 FENCE_RE = re.compile(
-    r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ \t]*$|\Z)", re.M | re.S
+    r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[ \t]*\r?$|\Z)", re.M | re.S
 )
 MARKDOWN_SUFFIXES = (".md", ".markdown", ".mdx")
 # markdown inline code: a run of N backticks (not backslash-escaped) up to the next run of exactly N;
 # it may wrap onto the next line but not across a blank line
 INLINE_CODE_RE = re.compile(
-    r"(?<![`\\])(`+)(?!`)(?:[^\n]|\n(?![ \t]*\n))*?(?<!`)\1(?!`)"
+    r"(?<![`\\])(`+)(?!`)(?:[^\n]|\n(?![ \t]*\r?\n))*?(?<!`)\1(?!`)"
 )
 LINK_RE = re.compile(
     r"(?<!!)\[(?P<text>[^\]\n]*)\]\((?P<url>[^\s()]+)"
@@ -45,6 +46,12 @@ TITLE_SIMPLE_RE = re.compile(r"(?P<sym>[\w.]*)(?:\s*:\s+(?P<quote>.+))?", re.S)
 TITLE_QUOTED_RE = re.compile(r"(?P<sym>[\w.]*)\s*(?P<rest>[`「].*)", re.S)
 PART_RE = re.compile(r"(\d+)(?:[-~](\d+))?")
 PINNED_BEFORE_RE = re.compile(r"@[0-9a-f]{7,40}:$")
+# a region of examples (docs that teach the citation syntax) that is not checked; each marker on a line
+# of its own and, in markdown, outside code (at most 3 spaces in, not in a fence), so a marker shown as
+# an example — in prose, inline code, a fence or an indented code block — is just text
+IGNORE_MARKER_RE = re.compile(
+    r"^ {0,3}<!--[ \t]*linecite-ignore-(?P<edge>start|end)[ \t]*-->[ \t]*\r?$", re.M
+)
 
 
 class Syntax:
@@ -142,9 +149,45 @@ def blank(text: str, spans: list[tuple[int, int]]) -> str:
     return "".join(chars)
 
 
+def ignore_regions(
+    text: str, path: Path
+) -> tuple[list[tuple[int, int]], list[tuple[int, str]]]:
+    """Spans between linecite-ignore-start and -end markers, and the markers that pair with nothing.
+
+    An unclosed start ignores nothing: silently skipping the rest of a document would hide citations.
+    """
+    regions: list[tuple[int, int]] = []
+    unpaired: list[tuple[int, str]] = []
+    fences = (
+        [m.span() for m in FENCE_RE.finditer(text)]
+        if path.suffix.lower() in MARKDOWN_SUFFIXES
+        else []
+    )
+    start = None
+    for m in IGNORE_MARKER_RE.finditer(text):
+        if any(a <= m.start() < b for a, b in fences):
+            continue  # shown as an example
+        if m.group("edge") == "start":
+            if start is not None:
+                unpaired.append(
+                    (start, "linecite-ignore-start is not closed before the next one")
+                )
+            start = m.start()
+        elif start is None:
+            unpaired.append(
+                (m.start(), "linecite-ignore-end has no linecite-ignore-start")
+            )
+        else:
+            regions.append((start, m.end()))
+            start = None
+    if start is not None:
+        unpaired.append((start, "linecite-ignore-start has no linecite-ignore-end"))
+    return regions, unpaired
+
+
 def visible(text: str, path: Path, syntax: Syntax, skip_fences: bool = False) -> str:
-    """The text with skipped regions blanked: configured ignore patterns, plus fenced code blocks if asked."""
-    spans: list[tuple[int, int]] = []
+    """The text with skipped regions blanked: ignore markers and patterns, plus fenced code blocks if asked."""
+    spans = ignore_regions(text, path)[0]
     if skip_fences and path.suffix.lower() in MARKDOWN_SUFFIXES:
         spans += [m.span() for m in FENCE_RE.finditer(text)]
     for rx in syntax.ignore:
@@ -162,10 +205,11 @@ def line_of(text: str, pos: int) -> int:
 
 
 def display(path: Path) -> str:
+    """How reports name a document: relative to the working directory, with forward slashes on every OS."""
     try:
-        return str(path.resolve().relative_to(Path.cwd()))
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
-        return str(path)
+        return Path(path).as_posix()
 
 
 def _link_path(url: str) -> str | None:
@@ -274,7 +318,9 @@ def extract(
     """
     view = visible(text, path, syntax)
     cites: list[Citation] = []
+    comments: list[tuple[int, int]] = []  # the <!--@ … --> part of each anchor
     for m in syntax.anchor.finditer(view):
+        comments.append((m.end("suf"), m.end()))
         spec = m.group("spec").strip()
         slot = Slot(m.start("num"), m.end("num"), m.group("num"), "num")
         cites.append(
@@ -293,12 +339,18 @@ def extract(
         if not any(a <= m.start() < b for a, b in owned)
     ]
 
-    # links are markup only outside code fences and inline code; there they are literal example text
-    prose = visible(blank(text, owned + orphans), path, syntax, skip_fences=True)
+    # links are markup only outside code fences and inline code; there they are literal example text.
+    # Only the anchors' comments are blanked: the suffix before one may be the backtick that closes
+    # inline code (`orders.py:10`<!--@ … -->), and dropping it would re-pair the paragraph's code spans
+    prose = visible(blank(text, comments + orphans), path, syntax, skip_fences=True)
     code = code_spans(prose) if path.suffix.lower() in MARKDOWN_SUFFIXES else []
     for m in LINK_RE.finditer(prose):
         c = None if any(a <= m.start() < b for a, b in code) else _link(m)
         if c is not None:
+            # a number an anchor owns ([line 3<!--@ … -->](…#L3)) is the anchor's to rewrite
+            c.slots = [
+                s for s in c.slots if not any(a <= s.start < b for a, b in owned)
+            ]
             cites.append(c)
     masked = blank(view, [c.span for c in cites] + orphans)
     for m in syntax.symref.finditer(masked):
@@ -365,6 +417,8 @@ def scan_file(
             found.broken.append(
                 f"{name}:{line_of(text, a)}: anchor has no number right before it  [{spec}]"
             )
+    for at, why in ignore_regions(text, path)[1]:
+        found.broken.append(f"{name}:{line_of(text, at)}: {why}")
 
     if write and edits:
         out, last = [], 0

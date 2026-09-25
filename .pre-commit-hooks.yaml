@@ -1,0 +1,18 @@
+# A commit that touches only code can move the lines a doc cites, so both hooks read every document in
+# the configuration on every commit instead of the staged files.
+- id: linecite-check
+  name: linecite check
+  description: Fail when doc citations drifted, no longer resolve, or cite code by number only.
+  entry: linecite check
+  language: python
+  pass_filenames: false
+  always_run: true
+  require_serial: true
+- id: linecite-sync
+  name: linecite sync
+  description: Rewrite drifted line numbers in doc citations, then fail on what still needs a human.
+  entry: linecite sync
+  language: python
+  pass_filenames: false
+  always_run: true
+  require_serial: true

@@ -1,6 +1,6 @@
 """Configuration: which code repository is cited and which documents cite it.
 
-Looked up in this order: --config FILE, ./.coderef.toml (top-level keys), ./pyproject.toml ([tool.coderef]).
+Looked up in this order: --config FILE, ./.linecite.toml (top-level keys), ./pyproject.toml ([tool.linecite]).
 
     code_root        = "."                 # git repo of the cited code, relative to the config file
     docs             = ["docs/**/*.md"]    # documents to scan (globs, relative to the config file)
@@ -63,8 +63,8 @@ def _section(path: Path) -> dict | None:
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}") from e
     if path.name == "pyproject.toml":
-        return data.get("tool", {}).get("coderef")
-    return data.get("tool", {}).get("coderef", data)
+        return data.get("tool", {}).get("linecite")
+    return data.get("tool", {}).get("linecite", data)
 
 
 def _strings(data: dict, key: str, where: Path) -> tuple[str, ...] | None:
@@ -86,7 +86,7 @@ def load(config_path: Path | None, root_override: Path | None, cwd: Path) -> Con
         data = _section(config_path) or {}
         base, source = config_path.resolve().parent, config_path
     else:
-        for name in (".coderef.toml", "pyproject.toml"):
+        for name in (".linecite.toml", "pyproject.toml"):
             p = cwd / name
             if p.is_file():
                 section = _section(p)

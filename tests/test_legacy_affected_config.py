@@ -19,10 +19,10 @@ def test_legacy_modes(sb, capsys):
     sb.write("app/orders.py", ORDERS)
     sb.write("docs/a.md", "see orders.py:12\n")
     sb.commit()
-    sb.write(".coderef.toml", 'legacy = "warn"\n')
+    sb.write(".linecite.toml", 'legacy = "warn"\n')
     code, out = sb.run("check", "docs/a.md", capsys=capsys)
     assert code == 0 and "(not failing)" in out
-    sb.write(".coderef.toml", 'legacy = "off"\n')
+    sb.write(".linecite.toml", 'legacy = "off"\n')
     code, out = sb.run("check", "docs/a.md", capsys=capsys)
     assert code == 0 and "legacy 0" in out
 
@@ -77,7 +77,7 @@ def test_config_from_pyproject_with_separate_code_root(sb, capsys, tmp_path_fact
     code.commit()
     sb.write(
         "pyproject.toml",
-        f'[tool.coderef]\ncode_root = "{code_dir.as_posix()}"\ndocs = ["notes/**/*.md"]\n',
+        f'[tool.linecite]\ncode_root = "{code_dir.as_posix()}"\ndocs = ["notes/**/*.md"]\n',
     )
     sb.write("notes/deep/a.md", "line 1<!--@ orders.py::TIMEOUT -->\n")
     rc, out = sb.run("sync", capsys=capsys)
@@ -86,7 +86,7 @@ def test_config_from_pyproject_with_separate_code_root(sb, capsys, tmp_path_fact
 
 
 def test_unknown_config_key_is_an_error(sb, capsys):
-    sb.write(".coderef.toml", 'doc = ["x.md"]\n')
+    sb.write(".linecite.toml", 'doc = ["x.md"]\n')
     sb.write("x.md", "hi\n")
     rc, out = sb.run("check", "x.md", capsys=capsys)
     assert rc == 2 and "unknown key(s) doc" in out

@@ -122,7 +122,7 @@ def test_separate_code_repo_links_by_code_root_path(sb, capsys, tmp_path_factory
     code = Sandbox(tmp_path_factory.mktemp("code"))
     code.write("svc/orders.py", ORDERS)
     code.commit()
-    sb.write(".coderef.toml", f'code_root = "{code.root.as_posix()}"\n')
+    sb.write(".linecite.toml", f'code_root = "{code.root.as_posix()}"\n')
     sb.write("notes/a.md", "The lock is at orders.py:10.\n")
     assert adopt_and_check(sb, capsys, "notes/a.md") == (
         'The lock is at [orders.py:10](svc/orders.py#L10 "OrderService.create_order: row.lock()").\n'
@@ -196,3 +196,17 @@ def test_link_inside_inline_code_is_an_example(sb, capsys):
     sb.commit()
     code, out = sb.run("check", "docs/a.md", capsys=capsys)
     assert code == 0 and "legacy 0" in out, out
+
+
+def test_def_line_is_quoted_by_its_name_not_its_signature(sb, capsys):
+    stale_doc(sb, "docs/a.md", "Orders are created at orders.py:7.\n")
+    assert adopt_and_check(sb, capsys, "docs/a.md") == (
+        "Orders are created at "
+        '[orders.py:9](../app/orders.py#L9 "OrderService.create_order: def create_order(").\n'
+    )
+    sb.write(
+        "app/orders.py",
+        MOVED.replace("create_order(self, items)", "create_order(self, items, *, lock=True)"),
+    )
+    code, out = sb.run("check", "docs/a.md", capsys=capsys)
+    assert code == 0, out

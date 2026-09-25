@@ -1,6 +1,6 @@
-from coderef.repo import Repo
-from coderef.spec import resolve
 from conftest import ORDERS, Sandbox
+from linecite.repo import Repo
+from linecite.spec import resolve
 
 MOVED = '"""Orders."""\n\n' + ORDERS.lstrip(
     "\n"
@@ -177,7 +177,7 @@ def test_separate_code_repo_is_read_as_of_the_doc_line_date(
     code.commit(date="2026-01-01T00:00:00+0000")
     code.write("app/orders.py", MOVED)
     code.commit(date="2026-03-01T00:00:00+0000")
-    sb.write(".coderef.toml", f'code_root = "{code.root.as_posix()}"\n')
+    sb.write(".linecite.toml", f'code_root = "{code.root.as_posix()}"\n')
     sb.write("docs/a.md", "before any code: orders.py:1\n")
     sb.commit(date="2025-12-01T00:00:00+0000")
     sb.write("docs/a.md", "before any code: orders.py:1\nfebruary: orders.py:10\n")
@@ -226,7 +226,7 @@ def test_renamed_file_is_followed(sb, capsys):
 
 
 def test_number_without_a_file_is_unknown(sb, capsys):
-    sb.write(".coderef.toml", 'number_suffixes = ["`", "L"]\n')
+    sb.write(".linecite.toml", 'number_suffixes = ["`", "L"]\n')
     sb.write("app/orders.py", ORDERS)
     sb.write("docs/a.md", "The lock is at 10L.\n")
     sb.commit()
@@ -298,6 +298,7 @@ def test_shallow_clone_cannot_date_old_lines(sb, capsys, tmp_path_factory, monke
     monkeypatch.chdir(clone)
     code, out = sb.run("audit", "docs/a.md", capsys=capsys)
     assert "\tunverifiable\t" in out and "shallow clone" in out, out
+    assert "fetch-depth: 0" in out  # the CI fix, once, under the table
     assert code == 0
 
 
@@ -312,11 +313,18 @@ def test_separate_repo_date_follows_the_mainline(sb, capsys, tmp_path_factory):
     code.commit(date="2026-02-10T00:00:00+0000")
     code.git("checkout", "-q", main)
     code.git(
-        "merge", "-q", "--no-ff", "-m", "merge", "feature",
-        env={"GIT_AUTHOR_DATE": "2026-03-01T00:00:00+0000",
-             "GIT_COMMITTER_DATE": "2026-03-01T00:00:00+0000"},
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "merge",
+        "feature",
+        env={
+            "GIT_AUTHOR_DATE": "2026-03-01T00:00:00+0000",
+            "GIT_COMMITTER_DATE": "2026-03-01T00:00:00+0000",
+        },
     )
-    sb.write(".coderef.toml", f'code_root = "{code.root.as_posix()}"\n')
+    sb.write(".linecite.toml", f'code_root = "{code.root.as_posix()}"\n')
     sb.write("docs/a.md", "The lock is at orders.py:10.\n")
     sb.commit(date="2026-02-15T00:00:00+0000")
     _, rows, _ = audit_rows(sb, capsys, "docs/a.md")
@@ -325,7 +333,7 @@ def test_separate_repo_date_follows_the_mainline(sb, capsys, tmp_path_factory):
 
 def test_code_root_may_be_a_subdirectory(sb, capsys):
     sb.write("svc/app/orders.py", ORDERS)
-    sb.write(".coderef.toml", 'code_root = "svc"\n')
+    sb.write(".linecite.toml", 'code_root = "svc"\n')
     sb.write("docs/a.md", "The lock is at orders.py:10.\n")
     sb.commit()
     sb.write("svc/app/orders.py", MOVED)

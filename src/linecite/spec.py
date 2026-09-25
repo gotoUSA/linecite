@@ -200,6 +200,10 @@ def too_short(line: str) -> bool:
     return len(re.findall(r"\w", line)) < MIN_WORD_CHARS
 
 
+# `def name(` / `class Name:` — how a citation quotes a symbol's own def line, so a changed signature keeps it
+DEF_HEAD_RE = re.compile(r"(?:async\s+)?(?:def|class)\s+(?P<name>\w+)\s*[(:]")
+
+
 @dataclass(frozen=True)
 class Naming:
     """How a citation names lines: a symbol and quotes (text, n-th hit); no quotes = the whole symbol."""
@@ -236,6 +240,9 @@ def describe(repo: Repo, path: str, a: int, b: int, sha: str | None = None) -> N
     quotes = []
     for n in dict.fromkeys((a, b)):
         text = lines[n - 1].strip()
+        head = DEF_HEAD_RE.match(text)
+        if head and sym and head.group("name") == sym.rsplit(".", 1)[-1]:
+            text = head.group(0)
         if too_short(text):
             raise RefError(
                 f"line {n} ({text!r}) has too little text to quote"

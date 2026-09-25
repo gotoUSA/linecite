@@ -1,7 +1,7 @@
 import pytest
-from coderef.errors import RefError
-from coderef.repo import Repo
-from coderef.spec import format_quote, parse_refs, resolve
+from linecite.errors import RefError
+from linecite.repo import Repo
+from linecite.spec import format_quote, parse_refs, resolve
 from conftest import ORDERS
 
 
@@ -102,3 +102,14 @@ def test_parse_refs_grammar():
 def test_format_quote_round_trips():
     for text in ['order_by("id")', "echo `date`", "a ``b`` c"]:
         assert parse_refs(format_quote(text))[0].quote == text
+
+
+def test_function_locals_are_not_symbols(sb, capsys):
+    sb.write("app/orders.py", ORDERS)
+    sb.commit()
+    code, out = sb.run("locate", "app/orders.py", "8", capsys=capsys)
+    assert code == 0, out
+    assert "in OrderService.create_order\n" in out
+    assert '"OrderService.create_order: rows = sorted(' in out
+    code, out = sb.run("where", "orders.py::TIMEOUT", capsys=capsys)
+    assert code == 0 and "18" in out  # module-level assignments stay symbols

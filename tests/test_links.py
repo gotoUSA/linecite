@@ -177,3 +177,33 @@ def test_locate_proposes_a_link(sb, capsys):
         'link  [orders.py:10](app/orders.py#L10 "OrderService.create_order: row.lock()")'
         in out
     )
+
+
+def test_link_after_a_backticked_anchor_is_still_checked(sb, capsys):
+    # the anchor owns the backtick that closes `orders.py:10`; blanking it with the anchor used to
+    # re-pair the paragraph's inline code, hiding the link that follows as if it were code
+    sb.write("app/orders.py", ORDERS)
+    sb.write(
+        "docs/a.md",
+        "Locks at `orders.py:10`<!--@ orders.py `row.lock()` --> in `create_order`, cancel at\n"
+        '[orders.py:1](../app/orders.py#L1 "cancel: cancelled") in `cancel`.\n',
+    )
+    sb.commit()
+    code, out = sb.run("check", "docs/a.md", capsys=capsys)
+    assert code == 1, out
+    assert "anchors 2 " in out and "L1 -> L14" in out
+
+
+def test_anchor_inside_link_text_is_rewritten_once(sb, capsys):
+    sb.write("app/orders.py", ORDERS)
+    sb.write(
+        "docs/a.md",
+        'See [line 3<!--@ app/orders.py::create_order `row.lock()` -->]'
+        '(../app/orders.py#L3 "create_order: row.lock()").\n',
+    )
+    sb.commit()
+    sb.run("sync", "docs/a.md", capsys=capsys)
+    assert sb.read("docs/a.md") == (
+        'See [line 10<!--@ app/orders.py::create_order `row.lock()` -->]'
+        '(../app/orders.py#L10 "create_order: row.lock()").\n'
+    )
