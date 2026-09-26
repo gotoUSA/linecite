@@ -4,6 +4,9 @@ Docs that cite code by line number (`orders.py:310`<!--@-->) go stale on the nex
 linecite lets a citation name the code it means — a **symbol and a quoted fragment** — derives the line number
 from the source, and tells you which paragraphs to re-read after the code changes.
 
+In the hand-written docs of 16 public repositories with 20k+ stars, two in three such numbers already point at
+the wrong line ([measurement](#how-often-cited-line-numbers-are-wrong)).
+
 ```md
 Locks are taken in product order at [orders.py:310](app/orders.py#L310 "create_order: order_by(\"product_id\")").
 ```
@@ -28,6 +31,32 @@ pip install linecite      # Python 3.11+, git
 
 Run it where your configuration is (see [Configuration](#configuration)), locally, as a
 [pre-commit hook](#pre-commit), or in [GitHub Actions](#github-action).
+
+## How often cited line numbers are wrong
+
+In September 2026, `linecite audit` was run read-only on 16 public repositories with 20k+ stars, found by
+searching markdown for `file:line` citations: 9 created in 2025 or later, and 7 older ones (playwright,
+mermaid, netdata, moby, deno, lazygit, vllm).
+
+- 4,901 number-only citations; 4,266 could be judged. The rest cite a path that is not in the repository,
+  a file name that several files share, or a blank line.
+- **Hand-written docs: 67.6% wrong** — 2,114 of 3,126. 1,669 now point at a different line than the one
+  the author meant; 445 point at code that no longer exists as written. Per repository (the 9 with 30+
+  judged citations) the median is 65.7%, from 5.2% to 90.0%.
+- Being recent does not help much: lines written in the last 90 days are 60.6% wrong; 90 days to a year,
+  83.9%. Agent instruction files (`AGENTS.md`, `CLAUDE.md`, `.claude/` and the like): 22 of 47.
+- **Generated docs: 6.0% wrong.** Checking on every change is what makes the difference: 2.3% in the
+  repository that regenerates and verifies its catalogs in CI, 36.6% where generated docs are not rebuilt
+  per change.
+- **It is a new habit.** 73% of the citations were written in the last 90 days and 15 are older than a
+  year; moby, lazygit and playwright have none. Line numbers are what AI-assisted development writes into
+  plans, reports and agent notes.
+
+Many of these docs are plans and reports — dated work notes as much as living docs. The number in them
+was right on the day, but it does not say which commit it was written against, so a reader following it
+today lands on other code. Verdicts are estimates, as in `audit`: a doc line edited later is dated by the
+edit. 65 sampled verdicts were checked by hand; all were correct. To see your own docs, run `linecite
+audit`.
 
 ## Existing docs: audit, then adopt
 
